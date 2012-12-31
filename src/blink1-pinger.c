@@ -43,8 +43,8 @@
 
 #include "lib/blink1-lib.h"
 
-#define MS 100
-#define PACKETSIZE	64
+#define MS 40
+#define PACKETSIZE 64
 #define ICMP_TYPE_ECHO_REPLY 0
 #define ICMP_TYPE_ECHO_REQUEST 8
 
@@ -134,11 +134,11 @@ void ping(struct sockaddr_in *addr)
 		icmp.msg[i] = 0;
 
 		if ( sendto(sd, &icmp, sizeof(icmp), 0, (struct sockaddr *)addr, sizeof(addr)) <= 0 ) {
-			blink1_fadeToRGB(blink, MS, 0, 0, 0);
+			blink1_fadeToRGB(blink, MS, 200, 0, 0);
 			puts("sendto: fail");
 		}
 		else {
-			blink1_fadeToRGB(blink, MS, 0, 100, 0);
+			blink1_fadeToRGB(blink, MS, 0, 0, 0);
 			puts("sendto: success");
 		}
 

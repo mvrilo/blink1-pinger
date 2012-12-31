@@ -134,7 +134,7 @@ void ping(struct sockaddr_in *addr)
 		icmp.msg[i] = 0;
 
 		if ( sendto(sd, &icmp, sizeof(icmp), 0, (struct sockaddr *)addr, sizeof(addr)) <= 0 ) {
-			blink1_fadeToRGB(blink, MS, 200, 0, 0);
+			blink1_fadeToRGB(blink, MS, 0, 0, 0);
 			puts("sendto: fail");
 		}
 		else {

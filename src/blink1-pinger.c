@@ -30,6 +30,17 @@
 #include <sys/time.h>
 #include <ev.h>
 
+#include "lib/blink1-lib.h"
+
+#define ICMP_TYPE_ECHO_REPLY 0
+#define ICMP_TYPE_ECHO_REQUEST 8
+
+#define CONN_STATE_KO 0
+#define CONN_STATE_SLOW 1
+#define CONN_STATE_OK 2
+
+#define MS 10
+
 struct ev_loop *loop;
 
 uint16_t icmp_id;
@@ -39,6 +50,8 @@ int last_rtt;
 int icmp_socket;
 int connection_state;
 
+hid_device* blink;
+
 struct ICMPHeader {
 	uint8_t  type;
 	uint8_t  code;
@@ -47,13 +60,6 @@ struct ICMPHeader {
 	uint16_t sequenceNumber;
 	int64_t  sentTime;
 };
-
-#define ICMP_TYPE_ECHO_REPLY 0
-#define ICMP_TYPE_ECHO_REQUEST 8
-
-#define CONN_STATE_KO 0
-#define CONN_STATE_SLOW 1
-#define CONN_STATE_OK 2
 
 /* This is the standard BSD checksum code, modified to use modern types. */
 static uint16_t in_cksum(const void *buffer, size_t bufferLen)
@@ -122,15 +128,17 @@ int64_t ustime(void)
 
 void changeConnectionState(int state)
 {
+	blink = blink1_open();
 	if (state == CONN_STATE_KO) {
-		//printf("OFF\n");
+		blink1_fadeToRGB(blink, MS, 255, 0, 0);
 	} else if (state == CONN_STATE_OK) {
-		//printf("ON\n");
+		blink1_fadeToRGB(blink, MS, 0, 0, 0);
 	} else if (state == CONN_STATE_SLOW) {
-		//printf("SLOW\n");
+		blink1_fadeToRGB(blink, MS, 105, 40, 0);
 	}
 
 	connection_state = state;
+	blink1_close(blink);
 }
 
 void sendPingwithId()
@@ -218,12 +226,9 @@ void timerHandler(struct ev_loop *loop, ev_timer *w, int revents)
 int main(int argc, char **argv)
 {
 	/* Run the program as daemon */
-	if (argc > 0 && strcmp(argv[1], "--daemon") == 0 || strcmp(argv[1], "-d") == 0) {
-		if (fork()) exit(0);
-
-		if (setsid() < 0) {
-			perror("setsid()");
-			exit(1);
+	if (argc > 1 && strcmp(argv[1], "-d") == 0) {
+		if (fork()) {
+			exit(0);
 		}
 	}
 

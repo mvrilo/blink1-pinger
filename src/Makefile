@@ -83,11 +83,10 @@ endif
 
 CC=gcc
 
-
 #################  Mac OS X  ##################################################
 ifeq "$(OS)" "macosx"
 LIBTARGET = libBlink1.dylib
-CFLAGS += -arch i386 -arch x86_64
+CFLAGS += -arch x86_64 #-arch i386
 CFLAGS += -pthread
 LIBS += -framework IOKit -framework CoreFoundation
 OBJS = ./hidapi/mac/hid.o
@@ -101,13 +100,10 @@ endif
 #################  Windows  ##################################################
 ifeq "$(OS)" "windows"
 LIBTARGET = lib/blink1-lib.dll
-#LIBS +=  -mwindows -lsetupapi -Wl,--enable-auto-import -static-libgcc -static-libstdc++ -lkernel32 
-#LIBS +=  -mwindows -lsetupapi -Wl,-Bdynamic -lgdi32 -Wl,--enable-auto-import -static-libgcc -static-libstdc++ -lkernel32
-LIBS +=             -lsetupapi -Wl,--enable-auto-import -static-libgcc -static-libstdc++ 
+LIBS += -lsetupapi -Wl,--enable-auto-import -static-libgcc -static-libstdc++ 
 OBJS = ./hidapi/windows/hid.o
 
 EXEFLAGS =
-#LIBFLAGS = -shared -o $(LIBTARGET) -Wl,--add-stdcall-alias -Wl,--export-all-symbols -Wl,--out-implib,$(LIBTARGET).a $(LIBS)
 LIBFLAGS = -shared -o $(LIBTARGET) -Wl,--add-stdcall-alias -Wl,--export-all-symbols
 
 EXE= .exe
@@ -137,11 +133,10 @@ LIBFLAGS = -shared -o $(LIBTARGET) $(LIBS)
 EXE=
 endif
 
-
 #####################  Common  ###############################################
 
-CFLAGS += -std=gnu99 -I ./firmware 
-CFLAGS += -I./hidapi/hidapi -I./lib
+CFLAGS += -std=gnu99 -lev
+CFLAGS += -I./firmware -I./hidapi/hidapi -I./lib
 
 OBJS += lib/blink1-lib.o
 

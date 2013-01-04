@@ -1,182 +1,243 @@
 /* blink-pinger.c
  *
- * A simple ping implementation working with Blink1
+ * A simple ping implementation to work together with blink(1)
  * v.0.0.1
  *
  * Author: Murilo Santana <mvrilo@gmail.com>
  * Copyright. All rights reserved.
  *
  *
- * Lot of the work here was heavily based on myping.c and iconping.
- * Licenses and links below. Thanks for the authors and contributors.
- *
- *
- *
- * myping.c
- * http://www.cs.utah.edu/~swalton/listings/sockets/programs/part4/chap18/myping.c
- *
- * Copyright (c) 2000 Sean Walton and Macmillan Publishers.  Use may be in
- * whole or in part in accordance to the General Public License (GPL).
- *
- *
+ * This is an implementation/fork of the iconping from @antirez,
+ * using the C api of blink(1) and libev for the timer loop.
+ * 
  *
  * iconping
  * https://github.com/antirez/iconping/
  *
  * Created by Salvatore Sanfilippo on 25/07/11.
  * Copyright Salvatore Sanfilippo. All rights reserved.
- *
-*/
+ */
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <sys/socket.h>
-#include <resolv.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <signal.h>
+#include <sys/time.h>
+#include <ev.h>
 
-#include "lib/blink1-lib.h"
+struct ev_loop *loop;
 
-#define MS 40
-#define PACKETSIZE 64
-#define ICMP_TYPE_ECHO_REPLY 0
-#define ICMP_TYPE_ECHO_REQUEST 8
+uint16_t icmp_id;
+uint16_t icmp_seq;
+int64_t last_received_time;
+int last_rtt;
+int icmp_socket;
+int connection_state;
 
-struct icmp {
+struct ICMPHeader {
 	uint8_t  type;
 	uint8_t  code;
 	uint16_t checksum;
-	uint16_t id;
-	uint16_t sequence;
-	char msg[PACKETSIZE-sizeof(struct icmp *)];
+	uint16_t identifier;
+	uint16_t sequenceNumber;
+	int64_t  sentTime;
 };
 
-int pid = -1, fpid = -1;
-hid_device* blink;
+#define ICMP_TYPE_ECHO_REPLY 0
+#define ICMP_TYPE_ECHO_REQUEST 8
 
-void blink_off()
+#define CONN_STATE_KO 0
+#define CONN_STATE_SLOW 1
+#define CONN_STATE_OK 2
+
+/* This is the standard BSD checksum code, modified to use modern types. */
+static uint16_t in_cksum(const void *buffer, size_t bufferLen)
 {
-	blink1_fadeToRGB(blink, MS, 0, 0, 0);
-	blink1_close(blink);
-	exit(0);
-}
+	size_t              bytesLeft;
+	int32_t             sum;
+	const uint16_t *    cursor;
+	union {
+		uint16_t        us;
+		uint8_t         uc[2];
+	} last;
+	uint16_t            answer;
 
-unsigned short checksum(void *b, int len)
-{	
-	unsigned short *buf = b;
-	unsigned int sum=0;
-	unsigned short result;
+	bytesLeft = bufferLen;
+	sum = 0;
+	cursor = buffer;
 
-	for ( sum = 0; len > 1; len -= 2 )
-		sum += *buf++;
-
-	if ( len == 1 )
-		sum += *(unsigned char*)buf;
-
-	sum = (sum >> 16) + (sum & 0xFFFF);
-	sum += (sum >> 16);
-	result = ~sum;
-	return result;
-}
-
-void listener(void)
-{
-	int sd;
-	struct sockaddr_in addr;
-	unsigned char buf[1024];
-
-	sd = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
-	if ( sd < 0 ) {
-		perror("socket");
+	/*
+	 * Our algorithm is simple, using a 32 bit accumulator (sum), we add
+	 * sequential 16 bit words to it, and at the end, fold back all the
+	 * carry bits from the top 16 bits into the lower 16 bits.
+	 */
+	while (bytesLeft > 1) {
+		sum += *cursor;
+		cursor += 1;
+		bytesLeft -= 2;
+	}
+	/* mop up an odd byte, if necessary */
+	if (bytesLeft == 1) {
+		last.uc[0] = * (const uint8_t *) cursor;
+		last.uc[1] = 0;
+		sum += last.us;
 	}
 
-	for (;;) {
-		int bytes;
-		socklen_t len = sizeof(addr);
-		bzero(buf, sizeof(buf));
-		bytes = recvfrom(sd, buf, sizeof(buf), 0, (struct sockaddr*)&addr, &len);
-	}
+	/* add back carry outs from top 16 bits to low 16 bits */
+	sum = (sum >> 16) + (sum & 0xffff);     /* add hi 16 to low 16 */
+	sum += (sum >> 16);                     /* add carry */
+	answer = ~sum;                          /* truncate to 16 bits */
 
-	blink_off();
+	return answer;
 }
 
-void ping(struct sockaddr_in *addr)
+int setSocketNonBlocking(int fd)
 {
-	int i, sd, cnt = 1;
-	struct icmp icmp;
+	int flags;
 
-	sd = socket(PF_INET, SOCK_RAW, IPPROTO_ICMP);
-	if ( sd < 0 ) {
-		perror("socket");
-		return;
+	/* Set the socket nonblocking.
+	 * Note that fcntl(2) for F_GETFL and F_SETFL can't be
+	 * interrupted by a signal. */
+	if ((flags = fcntl(fd, F_GETFL)) == -1) return -1;
+	if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) return -1;
+	return 0;
+}
+
+/* Return the UNIX time in microseconds */
+int64_t ustime(void)
+{
+	struct timeval tv;
+	long long ust;
+
+	gettimeofday(&tv, NULL);
+	ust = ((int64_t)tv.tv_sec)*1000000;
+	ust += tv.tv_usec;
+	return ust;
+}
+
+void changeConnectionState(int state)
+{
+	if (state == CONN_STATE_KO) {
+		//printf("OFF\n");
+	} else if (state == CONN_STATE_OK) {
+		//printf("ON\n");
+	} else if (state == CONN_STATE_SLOW) {
+		//printf("SLOW\n");
 	}
 
-	if ( fcntl(sd, F_SETFL, O_NONBLOCK) != 0 )
-		perror("Request nonblocking I/O");
+	connection_state = state;
+}
 
-	for (;;) {
-		bzero(&icmp, sizeof(icmp));
-		icmp.id = pid;
-		icmp.code = 0;
-		icmp.type = ICMP_TYPE_ECHO_REQUEST;
-		icmp.sequence = cnt++;
-		icmp.checksum = checksum(&icmp, sizeof(icmp));
+void sendPingwithId()
+{
+	if (icmp_socket != -1) close(icmp_socket);
 
-		for ( i = 0; i < sizeof(icmp.msg)-1; i++ )
-			icmp.msg[i] = i + '0';
+	int s = icmp_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP);
 
-		icmp.msg[i] = 0;
+	struct sockaddr_in sa;
+	struct ICMPHeader icmp;
 
-		if ( sendto(sd, &icmp, sizeof(icmp), 0, (struct sockaddr *)addr, sizeof(addr)) <= 0 ) {
-			blink1_fadeToRGB(blink, MS, 200, 0, 0);
-			puts("sendto: fail");
+	if (s == -1) return;
+	inet_aton("4.2.2.2", &sa.sin_addr);
+	setSocketNonBlocking(s);
+
+	/* Note that we create always a new socket, with a different identifier
+	 * and sequence number. This is to avoid to read old replies to our ICMP
+	 * request, and to be sure that even in the case the user changes
+	 * connection, routing, interfaces, everything will continue to work. */
+	icmp.type = ICMP_TYPE_ECHO_REQUEST;
+	icmp.code = 0;
+	icmp.identifier = icmp_id;
+	icmp.sequenceNumber = icmp_seq;
+	icmp.sentTime = ustime();   
+	icmp.checksum = in_cksum(&icmp,sizeof(icmp));
+
+	sendto(icmp_socket, (char *)&icmp, sizeof(icmp), 0, (struct sockaddr*)&sa, sizeof(sa));
+}
+
+void receivePing()
+{
+	unsigned char packet[1024*16];
+	struct ICMPHeader *reply;
+	ssize_t nread = read(icmp_socket, packet, sizeof(packet));
+	int icmpoff;
+
+	if (nread <= 0) return;
+	//printf("Received ICMP %d bytes\n", (int)nread);
+
+	icmpoff = (packet[0]&0x0f)*4;
+	//printf("ICMP offset: %d\n", icmpoff);
+
+	/* Don't process malformed packets. */
+	if (nread < (icmpoff + (signed)sizeof(struct ICMPHeader))) return;
+	reply = (struct ICMPHeader*) (packet+icmpoff);
+
+	/* Make sure that identifier and sequence match */
+	if (reply->identifier != icmp_id || reply->sequenceNumber != icmp_seq) return;
+
+	//printf("OK received an ICMP packet that matches!\n");
+	if (reply->sentTime > last_received_time) {
+		last_rtt = (int)(ustime()-reply->sentTime)/1000;
+		last_received_time = reply->sentTime;
+	}
+}
+
+void timerHandler(struct ev_loop *loop, ev_timer *w, int revents)
+{
+	static long clicks = -1;
+	int64_t elapsed;
+	int state;
+
+	clicks++;
+	if ((clicks % 10) == 0) {
+		//printf("Sending ping #%lu\n", clicks / 10);
+		sendPingwithId();
+	}
+	receivePing();
+
+	/* Update the current state accordingly */
+	elapsed = (ustime() - last_received_time)/1000; /* in milliseconds */
+
+	if (elapsed > 3000) {
+		state = CONN_STATE_KO;
+	} else if (last_rtt < 300) {
+		state = CONN_STATE_OK;
+	} else {
+		state = CONN_STATE_SLOW;
+	}
+
+	if (state == connection_state) return;
+	changeConnectionState(state);
+}
+
+int main(int argc, char **argv)
+{
+	/* Run the program as daemon */
+	if (argc > 0 && strcmp(argv[1], "--daemon") == 0 || strcmp(argv[1], "-d") == 0) {
+		if (fork()) exit(0);
+
+		if (setsid() < 0) {
+			perror("setsid()");
+			exit(1);
 		}
-		else {
-			blink1_fadeToRGB(blink, MS, 0, 0, 0);
-			puts("sendto: success");
-		}
-
-		sleep(1);
-	}
-}
-
-void trap(int s)
-{
-	kill(fpid, SIGTERM);
-	blink_off();
-}
-
-int main(void)
-{
-	blink = blink1_open();
-	if (!blink) {
-		puts("no blink(1) devices found");
-		exit(0);
 	}
 
-	pid = getpid();
-	struct hostent *hname = gethostbyname("4.2.2.2");
-	struct sockaddr_in addr;
+	loop = ev_default_loop(0);
+	struct ev_timer mytimer;
 
-	signal(SIGINT, &trap);
+	icmp_socket = -1;
+	icmp_id = random()&0xffff;
+	icmp_seq = random()&0xffff;
 
-	bzero(&addr, sizeof(addr));
-	addr.sin_family = hname->h_addrtype;
-	addr.sin_port = 0;
-	addr.sin_addr.s_addr = *(long*)hname->h_addr;
+	ev_timer_init(&mytimer, timerHandler, 0., .1);
 
-	fpid = fork();
-	if ( fpid == 0 )
-		listener();
-	else
-		ping(&addr);
+	ev_timer_start(loop, &mytimer);
+	ev_loop(loop, 0);
 
-	wait(0);
 	return 0;
 }

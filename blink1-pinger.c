@@ -1,13 +1,13 @@
 /* blink-pinger.c
  *
- * A simple ping implementation to work together with blink(1)
- * v.0.0.1
+ * A simple ping implementation to work with blink(1)
+ * v.0.1.0
  *
  * Author: Murilo Santana <mvrilo@gmail.com>
  * Copyright. All rights reserved.
  *
  *
- * This is an implementation/fork of the iconping from @antirez,
+ * This is a port to C/fork of the iconping from @antirez,
  * using the C api of blink(1) and libev for the timer loop.
  * 
  *

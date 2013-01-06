@@ -2,7 +2,7 @@
 
 Simple ping implementation to work with blink(1).
 
-This is a port to C/fork of the iconping from @antirez, using the C api of blink(1) and libev for the timer loop.
+This is a port to C from the @antirez's iconping, using the C api of blink(1) and libev for the timer loop.
 
 ## Reference
 

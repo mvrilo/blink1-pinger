@@ -1,7 +1,7 @@
 /* blink-pinger.c
  *
  * A simple ping implementation to work with blink(1)
- * v.0.1.0
+ * v.0.2.0
  *
  * Author: Murilo Santana <mvrilo@gmail.com>
  * Copyright. All rights reserved.

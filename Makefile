@@ -37,7 +37,7 @@ endif
 CFLAGS = $(OS_CFLAGS) -O -Wall -std=gnu99 $(USBFLAGS) -Ideps
 LIBS = $(OS_LIBS) $(USBLIBS) -Ideps -lev
 
-SRC = $(PROGRAM).c deps/hiddata.c deps/blink1-lib.c
+SRC = $(PROGRAM).c deps/hiddata.c deps/blink1-lib.c deps/commander.c
 OBJ = $(SRC:.c=.o)
 
 $(PROGRAM): $(OBJ)

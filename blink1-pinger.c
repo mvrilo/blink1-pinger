@@ -1,7 +1,7 @@
 /* blink-pinger.c
  *
  * A simple ping implementation to work with blink(1)
- * v.0.2.0
+ * v.0.3.0
  *
  * Author: Murilo Santana <mvrilo@gmail.com>
  * Copyright. All rights reserved.
@@ -30,8 +30,11 @@
 #include <sys/time.h>
 #include <ev.h>
 
+#include "commander.h"
 #include "hiddata.h"
 #include "blink1-lib.h"
+
+#define debug(...) if (opts.log) printf(__VA_ARGS__);
 
 #define ICMP_TYPE_ECHO_REPLY 0
 #define ICMP_TYPE_ECHO_REQUEST 8
@@ -60,6 +63,11 @@ struct ICMPHeader {
 	uint16_t sequenceNumber;
 	int64_t  sentTime;
 };
+
+struct {
+	int daemon;
+	int log;
+} opts;
 
 usbDevice_t *dev;
 
@@ -141,7 +149,6 @@ void changeConnectionState(int state)
 	}
 
 	connection_state = state;
-	//blink1_close(dev);
 }
 
 void sendPingwithId()
@@ -179,10 +186,10 @@ void receivePing()
 	int icmpoff;
 
 	if (nread <= 0) return;
-	//printf("Received ICMP %d bytes\n", (int)nread);
+	debug("Received ICMP %d bytes\n", (int)nread);
 
 	icmpoff = (packet[0]&0x0f)*4;
-	//printf("ICMP offset: %d\n", icmpoff);
+	debug("ICMP offset: %d\n", icmpoff);
 
 	/* Don't process malformed packets. */
 	if (nread < (icmpoff + (signed)sizeof(struct ICMPHeader))) return;
@@ -191,7 +198,7 @@ void receivePing()
 	/* Make sure that identifier and sequence match */
 	if (reply->identifier != icmp_id || reply->sequenceNumber != icmp_seq) return;
 
-	//printf("OK received an ICMP packet that matches!\n");
+	debug("OK received an ICMP packet that matches!\n");
 	if (reply->sentTime > last_received_time) {
 		last_rtt = (int)(ustime()-reply->sentTime)/1000;
 		last_received_time = reply->sentTime;
@@ -206,7 +213,7 @@ void timerHandler(struct ev_loop *loop, ev_timer *w, int revents)
 
 	clicks++;
 	if ((clicks % 10) == 0) {
-		//printf("Sending ping #%lu\n", clicks / 10);
+		debug("Sending ping #%lu\n", clicks / 10);
 		sendPingwithId();
 	}
 	receivePing();
@@ -226,14 +233,18 @@ void timerHandler(struct ev_loop *loop, ev_timer *w, int revents)
 	changeConnectionState(state);
 }
 
+static void daemonizer() { opts.daemon = 1; }
+static void logger() { opts.log = 1; }
+
 int main(int argc, char **argv)
 {
-	/* Run the program as daemon */
-	if (argc > 1 && strcmp(argv[1], "-d") == 0) {
-		if (fork()) {
-			exit(0);
-		}
-	}
+	command_t cmd;
+	command_init(&cmd, argv[0], "0.3.0");
+	command_option(&cmd, "-d", "--daemonize", "run as daemon", daemonizer);
+	command_option(&cmd, "-l", "--logger", "output all logs", logger);
+	command_parse(&cmd, argc, argv);
+
+	if (opts.daemon && fork()) exit(0);
 
 	blink1_open(&dev);
 

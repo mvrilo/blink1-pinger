@@ -17,49 +17,34 @@
 #   - May need to symlink libusb 
 #      "cd /lib; ln -s libusb-0.1.so.4 libusb.so"
 
-TARGET = blink1-pinger
-
 CC = gcc
-ifeq "$(OS)" ""
-	OS = `uname`
-endif
-
+PROGRAM  = blink1-pinger
 USBFLAGS = `libusb-config --cflags`
 USBLIBS  = `libusb-config --libs`
+ifeq "$(OS)" ""
+OS = `uname`
+endif
 
-#################  OpenWrt / DD-WRT #########################################
+# OpenWrt / DD-WRT
 ifeq "$(OS)" "wrt"
-
 WRT_SDK_HOME := $(HOME)/OpenWrt-SDK-Linux-i686-1
-
 CC = $(WRT_SDK_HOME)/staging_dir_mipsel/bin/mipsel-linux-gcc
 LD = $(WRT_SDK_HOME)/staging_dir_mipsel/bin/mipsel-linux-ld
 USBFLAGS = "-I$(WRT_SDK_HOME)/staging_dir_mipsel/usr/include"
 USBLIBS  = "$(WRT_SDK_HOME)/staging_dir_mipsel/usr/lib/libusb.a"
-
 endif
 
-CFLAGS =	$(OS_CFLAGS) -O -Wall -std=gnu99 $(USBFLAGS)
-LIBS =	$(OS_LIBS) $(USBLIBS) -lev
+CFLAGS = $(OS_CFLAGS) -O -Wall -std=gnu99 $(USBFLAGS) -Ideps
+LIBS = $(OS_LIBS) $(USBLIBS) -Ideps -lev
 
-OBJ = $(TARGET).o blink1-lib.o hiddata.o
-
-PROGRAM = $(TARGET)$(EXE_SUFFIX)
-
-all: msg $(PROGRAM)
-
-msg: 
-	@echo "building for OS=$(OS)"
-
-# symbolic targets:
-help:
-	@echo "This Makefile works on multiple archs. Use one of the following:"
-	@echo "make clean ..... to delete objects and hex file"
-	@echo
+SRC = $(PROGRAM).c deps/hiddata.c deps/blink1-lib.c
+OBJ = $(SRC:.c=.o)
 
 $(PROGRAM): $(OBJ)
 	$(CC) -o $(PROGRAM) $(OBJ) $(LIBS)
 
+.c.o:
+	$(CC) $(ARCH_COMPILE) $(CFLAGS) -c $*.c -o $*.o
 
 strip: $(PROGRAM)
 	strip $(PROGRAM)
@@ -67,12 +52,5 @@ strip: $(PROGRAM)
 clean:
 	rm -f $(OBJ) $(PROGRAM)
 
-.c.o:
-	$(CC) $(ARCH_COMPILE) $(CFLAGS) -c $*.c -o $*.o
-
-# shows shared lib usage on Mac OS X
 otool:
-	otool -L $(TARGET)
-
-foo:
-	@echo "OS=$(OS), USBFLAGS=$(USBFLAGS)"
+	otool -L $(PROGRAM)
